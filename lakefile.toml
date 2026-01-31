@@ -1,0 +1,14 @@
+name = "seccap"
+version = "0.1.0"
+defaultTargets = ["seccap"]
+
+[[lean_lib]]
+name = "Seccap"
+
+[[lean_exe]]
+name = "seccap"
+root = "Main"
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
