@@ -2,6 +2,8 @@ import Mathlib.Data.Finsupp.Defs
 -- import Mathlib.Data.Finsupp.Option
 import Mathlib.Data.Finset.Defs
 
+import Seccap.Finmap
+
 structure Var where
     val : String
 deriving DecidableEq
@@ -150,55 +152,28 @@ lemma CExpr.y_mem_subst_fvs (e: CExpr) y z :
 
 
 
-instance Option.instZero {α} : Zero (Option α) := ⟨none⟩
-
-lemma Finsupp.mem_support_is_some {α β} (f : α →₀ Option β):
-    ∀ a, a ∈ f.support ↔ (f a).isSome := by
-    intro a
-    rw [Option.isSome_iff_ne_none]
-    exact f.mem_support_iff
-
-
 structure CapsuleStore where
-    f : Var →₀ Option CVal
+    f : Finmap Var CVal
     h : ∀ x, (h': x ∈ f.support) → ((f x).get ((f.mem_support_is_some x).mp h')).fvs ⊆ f.support
 
 -- @[simp]
 abbrev CapsuleStore.dom (μ : CapsuleStore) := μ.f.support
 
-def CapsuleStore.get (μ : CapsuleStore) x (h: x ∈ μ.dom) := (μ.f x).get ((μ.f.mem_support_is_some x).mp h)
+abbrev CapsuleStore.get (μ : CapsuleStore) x (h: x ∈ μ.dom) := (μ.f x).get ((μ.f.mem_support_is_some x).mp h)
 
-def CapsuleStore.insert (μ : CapsuleStore) y (v: CVal) (h : v.fvs ⊆ μ.dom ∪ {y}) : CapsuleStore :=
-    let f := ⟨ μ.f.support ∪ {y}, fun x => if x = y then v else μ.f x, (by
-        intro x
-        simp
-        constructor
-        · intro H
-          split_ifs with h'
-          · simp
-          · exact H.resolve_left h'
-        · intro H
-          split_ifs at H with h'
-          · left; assumption
-          · right; assumption
-    )⟩
-    ⟨ f, (by
+abbrev CapsuleStore.insert (μ : CapsuleStore) y (v: CVal) (h : v.fvs ⊆ μ.dom ∪ {y}) : CapsuleStore :=
+    ⟨ μ.f.insert y v, (by
       intro x v'
-      simp [f]
+      simp [Finmap.insert]
       split_ifs with H
       · simp at h; simpa
       · intro fv h'
         apply Finset.mem_insert_of_mem
         apply μ.h x
         exact h'
-        simp [f, H] at v'
+        simp [Finmap.insert, H] at v'
         simpa
     ) ⟩
-
-@[simp]
-lemma CapsuleStore.insert_dom (μ : CapsuleStore) y v h :
-    (μ.insert y v h).dom = μ.dom ∪ {y} := by
-    simp [insert]
 
 
 
@@ -249,7 +224,7 @@ inductive CExpr.Step : Capsule → Capsule → Prop where
             · apply Finset.union_subset_right h
             · apply Finset.subset_union_left
          ), (by
-             simp
+             simp [CapsuleStore.insert, Finmap.insert]
              simp [fvs] at h
              intro z hz
              by_cases hx : x = z
@@ -308,3 +283,9 @@ inductive CExpr.Step : Capsule → Capsule → Prop where
     )⟩
 | comp e2 μ h :
   Step ⟨ .comp .unit e2, μ, h ⟩ ⟨ e2, μ, (by simp [fvs] at h; assumption )⟩
+
+
+lemma CExpr.Step.store_subset (c1 c2) :
+    Step c1 c2 → c1.μ.dom ⊆ c2.μ.dom := by
+    intro hs
+    induction hs with (try simp [Finmap.insert, CapsuleStore.dom]; try assumption)
