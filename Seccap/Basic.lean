@@ -4,8 +4,9 @@ import Mathlib.Data.Finset.Defs
 
 import Seccap.Finmap
 
-structure Var where
-    val : String
+inductive Var where
+| val (x: String)
+| fresh (n: ℕ)
 deriving DecidableEq
 
 inductive CExpr where
@@ -28,7 +29,11 @@ abbrev CVal.expr : CVal → CExpr
 | unit => .unit
 | abs x e => .abs x e
 
-
+abbrev CExpr.val? : CExpr → Option CVal
+| nat n => some <| .nat n
+| unit => some <| .unit
+| abs x e => some <| .abs x e
+| _ => none
 
 def CExpr.fvs : CExpr → Finset Var
 | .abs x e => e.fvs \ {x}
@@ -39,6 +44,15 @@ def CExpr.fvs : CExpr → Finset Var
 
 abbrev CVal.fvs (v : CVal) := v.expr.fvs
 
+def CExpr.bvs : CExpr → Finset Var
+| .abs x e => {x} ∪ e.bvs
+| .app e₁ e₂ | .comp e₁ e₂ => e₁.bvs ∪ e₂.bvs
+| .set _ e => e.bvs
+| _ => ∅
+
+def CExpr.fresh_wf e d :=
+    (∀ n, .fresh n ∉ bvs e) ∧ ∀ n ≥ d, .fresh n ∉ fvs e
+
 def CExpr.subst (e: CExpr) (y: Var) (z: Var): CExpr := match e with
 | .abs x e => .abs x (if x = y then e else e.subst y z)
 | .var x => .var (if x = y then z else x)
@@ -46,6 +60,10 @@ def CExpr.subst (e: CExpr) (y: Var) (z: Var): CExpr := match e with
 | .comp e1 e2 => .comp (e1.subst y z) (e2.subst y z)
 | .set x e => .set (if x = y then z else x) (e.subst y z)
 | e => e
+
+lemma CExpr.subst_bvs e x y :
+    bvs e = bvs (e.subst x y) := by
+    induction e with simp [subst, bvs] <;> aesop
 
 lemma CExpr.mem_subst_fvs_iff (e : CExpr) x y z (hy : x ≠ y) (hz : x ≠ z):
     x ∈ e.fvs ↔ x ∈ (e.subst y z).fvs := by
@@ -193,27 +211,25 @@ inductive CExpr.Step : Capsule → Capsule → Prop where
     ⟨ .var x, μ, h ⟩
     (have h': x ∈ μ.dom := by simp [CExpr.fvs] at h; simpa
     ⟨ (μ.get x h').expr, μ, μ.h x h' ⟩)
-| app_l' e1 e2 μ h h1 e1' μ' h1' (hμ: μ.dom ⊆ μ'.dom):
+| app_l' e1 e2 μ h h1 e1' μ' h1' (hμ: μ.dom = μ'.dom):
     Step ⟨ e1, μ, h1 ⟩ ⟨ e1', μ', h1' ⟩ →
     Step ⟨ .app e1 e2, μ, h ⟩
          ⟨ .app e1' e2, μ', (by
             simp [fvs]
             apply Finset.union_subset
             · assumption
-            · apply Finset.Subset.trans (s₂ := μ.dom)
-              · simp [fvs] at h
-                apply Finset.union_subset_right h
-              · assumption
-         ) ⟩
-| app_r' (v: CVal) e2 μ h h2 e2' μ' h2' (hμ: μ.dom ⊆ μ'.dom) :
+            · simp [fvs] at h
+              rw [hμ] at h
+              exact Finset.union_subset_right h
+    ) ⟩
+| app_r' (v: CVal) e2 μ h h2 e2' μ' h2' (hμ: μ.dom = μ'.dom) :
     Step ⟨ e2, μ, h2 ⟩ ⟨ e2', μ', h2' ⟩ →
     Step ⟨ .app v.expr e2, μ, h ⟩ ⟨ .app v.expr e2', μ', (by
         simp [fvs]
         apply Finset.union_subset
-        · apply Finset.Subset.trans (s₂ := μ.dom)
-          · simp [fvs] at h
-            apply Finset.union_subset_left h
-          · assumption
+        · simp [fvs] at h
+          rw [← hμ]
+          exact Finset.union_subset_left h
         · assumption
     )⟩
 | app_abs x e (v: CVal) μ h y (hy: y ∉ μ.dom) :
@@ -247,17 +263,15 @@ inductive CExpr.Step : Capsule → Capsule → Prop where
                      · exact Ne.symm hyz
                    · exact Ne.symm hx
          ) ⟩
-| set' x e μ h h1 e' μ' h' (hμ: μ.dom ⊆ μ'.dom):
+| set' x e μ h h1 e' μ' h' (hμ: μ.dom = μ'.dom):
     Step ⟨ e, μ, h ⟩ ⟨ e', μ', h' ⟩ →
     Step ⟨ .set x e, μ, h1 ⟩ ⟨ .set x e', μ', (by
         simp [fvs]
         apply Finset.insert_subset
-        · simp [fvs] at h1
+        · simp [fvs, hμ ] at h1
           apply Finset.mem_of_subset
-          · exact hμ
-          · apply Finset.mem_of_subset
-            · exact h1
-            · apply Finset.mem_insert_self
+          · exact h1
+          · apply Finset.mem_insert_self
         · exact h'
     )⟩
 | setv x (v: CVal) μ h :
@@ -270,22 +284,22 @@ inductive CExpr.Step : Capsule → Capsule → Prop where
       · apply Finset.subset_union_left
 
     ), by simp [fvs] ⟩
-| comp_l' e1 e2 μ h h1 e1' μ' h1' (hμ : μ.dom ⊆ μ'.dom) :
+| comp_l' e1 e2 μ h h1 e1' μ' h1' (hμ : μ.dom = μ'.dom) :
     Step ⟨ e1, μ, h1 ⟩ ⟨ e1', μ', h1' ⟩ →
     Step ⟨ .comp e1 e2, μ, h ⟩ ⟨ .comp e1' e2, μ', (by
         simp [fvs]
         apply Finset.union_subset
         · assumption
-        · apply Finset.Subset.trans (s₂ := μ.dom)
-          · simp [fvs] at h
-            apply Finset.union_subset_right h
-          · assumption
+        · simp [fvs] at h
+          rw [← hμ]
+          exact Finset.union_subset_right h
     )⟩
 | comp e2 μ h :
   Step ⟨ .comp .unit e2, μ, h ⟩ ⟨ e2, μ, (by simp [fvs] at h; assumption )⟩
 
+notation:10 c₁ " ⟶ " c₂  => CExpr.Step c₁ c₂
 
-lemma CExpr.Step.store_subset (c1 c2) :
-    Step c1 c2 → c1.μ.dom ⊆ c2.μ.dom := by
+lemma CExpr.Step.store_subset (c₁ c₂) :
+    (c₁ ⟶ c₂) → c₁.μ.dom ⊆ c₂.μ.dom := by
     intro hs
     induction hs with (try simp [Finmap.insert, CapsuleStore.dom]; try assumption)
