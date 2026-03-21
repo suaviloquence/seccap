@@ -212,6 +212,7 @@ inductive Term 𝔸 𝕏 C where
 | atom (a: 𝔸)
 | unknown (π: Perm 𝔸) (X: 𝕏)
 | abs (a: 𝔸) (t: Term 𝔸 𝕏 C)
+| asgn (a: 𝔸) (t: Term 𝔸 𝕏 C)
 | app (t₁ t₂: Term 𝔸 𝕏 C)
 | const (c: C)
 
@@ -224,6 +225,7 @@ def atoms : Term 𝔸 𝕏 C → Finset 𝔸
 | atom a => {a}
 | unknown π _ => π.support
 | abs a t => {a} ∪ t.atoms
+| asgn a t => {a} ∪ t.atoms
 | app t₁ t₂ => t₁.atoms ∪ t₂.atoms
 | const _ => ∅
 
@@ -231,19 +233,21 @@ def perm_action (π: Perm 𝔸) : Term 𝔸 𝕏 C → Term 𝔸 𝕏 C
 | atom a => atom (π a)
 | unknown π' X => unknown (π ∘ₚ π') X
 | abs a t =>  abs (π a) (t.perm_action π)
+| asgn a t =>  asgn (π a) (t.perm_action π)
 | app t₁ t₂ => app (t₁.perm_action π) (t₂.perm_action π)
 | const c => const c
 
-infix:80 " · " => perm_action
+infix:80 " ⬝ " => perm_action
 
 @[simp]
 lemma id_action (t: Term 𝔸 𝕏 C) :
-  Perm.id · t = t := by induction t <;> simp [*, perm_action]
+  Perm.id ⬝ t = t := by induction t <;> simp [*, perm_action]
 
 def subst (σ : 𝕏 → Term 𝔸 𝕏 C) : Term 𝔸 𝕏 C → Term 𝔸 𝕏 C
 | atom a => atom a
-| unknown π X => π · (σ X)
+| unknown π X => π ⬝ (σ X)
 | abs a t => abs a (t.subst σ)
+| asgn a t => asgn a (t.subst σ )
 | app t₁ t₂ => app (t₁.subst σ) (t₂.subst σ)
 | const c => const c
 
@@ -255,6 +259,7 @@ inductive Fresh (Δ : FreshnessCtx 𝔸 𝕏): 𝔸 → Term 𝔸 𝕏 C → Pro
 | F_unknown a π X : Fresh Δ (π.toEquiv.symm a) (unknown' X) → Fresh Δ a (unknown π X)
 | F_absa a t : Fresh Δ a (abs a t)
 | F_absb a b t (h: a ≠ b) : Fresh Δ a t → Fresh Δ a (abs b t)
+| F_asgn a b t (h: a ≠ b) : Fresh Δ a t → Fresh Δ a (asgn b t)
 | F_app a t₁ t₂ : Fresh Δ a t₁ → Fresh Δ a t₂ → Fresh Δ a (app t₁ t₂)
 | F_const a c : Fresh Δ a (const c)
 
@@ -276,11 +281,11 @@ inductive NominalEq (T: Theory) (Δ: FreshnessCtx 𝔸 𝕏) : Term 𝔸 𝕏 C 
 | N_refl t : NominalEq T Δ t t
 | N_symm t u : NominalEq T Δ t u → NominalEq T Δ u t
 | N_trans t u v : NominalEq T Δ t u → NominalEq T Δ u v → NominalEq T Δ t v
-| N_perm a b t (h: a ≠ b) : (Δ ⊢ a#t) → (Δ ⊢ b#t) → NominalEq T Δ ((.prod .id a b h)·t) t
+| N_perm a b t (h: a ≠ b) : (Δ ⊢ a#t) → (Δ ⊢ b#t) → NominalEq T Δ ((.prod .id a b h)⬝t) t
 | N_cngAbs a t u : NominalEq T Δ t u → NominalEq T Δ (abs a t) (abs a u)
 | N_cngApp t₁ t₂ u₁ u₂ : NominalEq T Δ t₁ u₁ → NominalEq T Δ t₂ u₂ → NominalEq T Δ (app t₁ t₂) (app u₁ u₂)
 | N_ax Γ t u π σ : (Γ, t, u) ∈ T → ∀ p ∈ Γ, (Δ ⊢ p.fst # (unknown' p.snd).subst σ) →
-  NominalEq T Δ (π ·(t.subst σ)) (π ·(u.subst σ))
+  NominalEq T Δ (π ⬝(t.subst σ)) (π ⬝(u.subst σ))
 
 namespace NominalEq
 
@@ -295,8 +300,17 @@ end NominalEq
 def ground : Term 𝔸 𝕏 C → Bool
 | atom _ | const _ => true
 | unknown _ _ => false
-| abs _ t => t.ground
+| abs _ t | asgn _ t => t.ground
 | app t₁ t₂ => t₁.ground ∧ t₂.ground
+
+def size : Term 𝔸 𝕏 C → ℕ
+| atom _ | unknown _ _ | const _ => 0
+| abs _ t | asgn _ t => t.size + 1
+| app t₁ t₂ => t₁.size + t₂.size + 1
+
+@[simp]
+lemma perm_action_size (t: Term 𝔸 𝕏 C) π : (π⬝t).size = t.size := by
+  induction t <;> simp [perm_action, size, *]
 
 abbrev CoreEq := @NominalEq 𝔸 𝕏 C _ ∅
 
@@ -305,7 +319,7 @@ abbrev CoreEq := @NominalEq 𝔸 𝕏 C _ ∅
 -- | C_unknown π₁ π₂ X : (∀ a ∈ π₁∆π₂, Term.Fresh (C := C) Δ a (unknown' X)) →
 --   CoreEq' Δ (unknown π₁ X) (unknown π₂ X)
 -- | C_absa a t u : CoreEq' Δ t u → CoreEq' Δ (abs a t) (abs a u)
--- | C_absb a b (h: a ≠ b) t u : Δ ⊢ b#t → CoreEq' Δ ((.prod .id a b h)·t) u →
+-- | C_absb a b (h: a ≠ b) t u : Δ ⊢ b#t → CoreEq' Δ ((.prod .id a b h)⬝t) u →
 --   CoreEq' Δ (abs a t) (abs b u)
 -- | C_app t₁ t₂ u₁ u₂ : CoreEq' Δ t₁ u₁ → CoreEq' Δ t₂ u₂ →
 --   CoreEq' Δ (app t₁ t₂) (app u₁ u₂)
@@ -323,6 +337,9 @@ lemma ground_notin_atoms (t: Term 𝔸 𝕏 C) a (hg: t.ground):
     apply Fresh.F_absb
     exact h.left
     exact ih hg h.right
+  | asgn x t ih =>
+    simp [ground] at hg
+    exact Fresh.F_asgn _ _ _ h.left (ih hg h.right)
   | app t₁ t₂ ih₁ ih₂ =>
     simp [ground] at hg
     apply Fresh.F_app
@@ -345,15 +362,14 @@ lemma ex_fresh [Infinite 𝔸] (t: Term 𝔸 𝕏 C) (hg: t.ground):
 
 
 lemma perm_action_ground (t: Term 𝔸 𝕏 C) π :
-  (π·t).ground = t.ground := by
-  induction t with simp [Term.perm_action, ground]
-  | abs a t ih => exact ih
-  | app t₁ t₂ ih₁ ih₂ => simp [ih₁, ih₂]
+  (π⬝t).ground = t.ground := by
+  induction t with simp [Term.perm_action, ground, *]
 
 lemma ground_perm_action_ext {π₁ π₂ : Perm 𝔸} (h: π₁ ≅ π₂) (t: Term 𝔸 𝕏 C) (ht: t.ground):
-  π₁·t = π₂·t := by induction t with simp [perm_action] <;> simp [ground] at ht
+  π₁⬝t = π₂⬝t := by induction t with simp [perm_action] <;> simp [ground] at ht
   | atom a => exact h a
   | abs a t ih => simp [h a, ih ht]
+  | asgn a t ih => simp [h a, ih ht]
   | app t₁ t₂ ih₁ ih₂ => simp [ih₁ ht.left, ih₂ ht.right]
 
 
@@ -362,6 +378,8 @@ inductive GroundDeBruijn (𝔸 C) where
 | fvar (a: 𝔸)
 | const (c: C)
 | abs (t: GroundDeBruijn 𝔸 C)
+| asgn_b (n : ℕ) (t: GroundDeBruijn 𝔸 C)
+| asgn_f (a: 𝔸) (t: GroundDeBruijn 𝔸 C)
 | app (t₁ t₂ : GroundDeBruijn 𝔸 C)
 
 namespace GroundDeBruijn
@@ -369,6 +387,8 @@ namespace GroundDeBruijn
 def perm_action (π : Perm 𝔸) : GroundDeBruijn 𝔸 C → GroundDeBruijn 𝔸 C
 | fvar a => fvar (π a)
 | abs t => abs (t.perm_action π)
+| asgn_b n t => asgn_b n (t.perm_action π)
+| asgn_f a t => asgn_f (π a) (t.perm_action π)
 | app t₁ t₂ => app (t₁.perm_action π) (t₂.perm_action π)
 | t => t
 
@@ -382,10 +402,9 @@ lemma perm_action_comp (t: GroundDeBruijn 𝔸 C) π₁ π₂ :
   induction t with simp [perm_action, *, Perm.comp_coe]
 
 lemma perm_action_ext {π₁ π₂ : Perm 𝔸} (h: π₁ ≅ π₂) (t: GroundDeBruijn 𝔸 C) :
-  t.perm_action π₁ = t.perm_action π₂ := by induction t with simp [perm_action]
+  t.perm_action π₁ = t.perm_action π₂ := by induction t with simp [perm_action, *]
   | fvar a => exact h a
-  | abs t ih => exact ih
-  | app t₁ t₂ ih₁ ih₂ => simp [ih₁, ih₂]
+  | asgn_f a => exact h a
 end GroundDeBruijn
 
 def debruijnify (t: Term 𝔸 𝕏 C) (ht: t.ground) : GroundDeBruijn 𝔸 C :=
@@ -397,14 +416,17 @@ def debruijnify (t: Term 𝔸 𝕏 C) (ht: t.ground) : GroundDeBruijn 𝔸 C :=
     | none => .fvar a
   | unknown .. => by simp [ground] at ht
   | abs a t => .abs <| go (a :: l) t (by simp [ground] at ht; exact ht)
+  | asgn a t => match l.idxOf? a with
+    | some n => .asgn_b n (go l t (by simp [ground] at ht; exact ht))
+    | none => .asgn_f a (go l t (by simp [ground] at ht; exact ht))
   | app t₁ t₂ =>
     .app (go l t₁ (by simp [ground] at ht; exact ht.left))  (go l t₂ (by simp [ground] at ht; exact ht.right))
 
 abbrev swap (t: Term 𝔸 𝕏 C) a b (h: a ≠ b):=
-  (Perm.swap a b h)·t
+  (Perm.swap a b h)⬝t
 
 lemma perm_action_prod (t : Term 𝔸 𝕏 C) π a b h :
-  (π.prod a b h)·t = π·(t.swap a b h) := by
+  (π.prod a b h)⬝t = π⬝(t.swap a b h) := by
   induction t with simp [*, perm_action, Perm.toEquiv]
   | unknown π' X => rw [Perm.comp_prod]
 
@@ -422,7 +444,6 @@ lemma swap_fresh (t: Term 𝔸 𝕏 C) a b (h: a ≠ b) Δ (hb: Δ ⊢ b#t) (ht:
     split_ifs at c with hc
     · subst hc; contradiction
     · cases hc c.symm
-  -- todo
   | unknown π x => simp [ground] at ht
   | const c => simp [perm_action]; constructor
   | app t₁ t₂ ih₁ ih₂ =>
@@ -436,6 +457,16 @@ lemma swap_fresh (t: Term 𝔸 𝕏 C) a b (h: a ≠ b) Δ (hb: Δ ⊢ b#t) (ht:
     apply ih₂
     exact h_2
     exact ht.right
+  | asgn x t ih =>
+    simp [ground] at ht
+    cases hb
+    expose_names
+    specialize ih h_2 ht
+    constructor <;> try assumption
+    simp [Perm.toEquiv, transpose, Ne.symm h_1]
+    split_ifs with hc
+    · exact h
+    · exact Ne.symm hc
   | abs x t ih =>
     simp [ground] at ht
     cases hb with
@@ -452,7 +483,7 @@ lemma swap_fresh (t: Term 𝔸 𝕏 C) a b (h: a ≠ b) Δ (hb: Δ ⊢ b#t) (ht:
 
 lemma perm_debruijn'
   (t: Term 𝔸 𝕏 C) (ht: t.ground) l π:
-    debruijnify.go (l.map (π.inv)) t ht = (debruijnify.go l (π·t) (by simp [perm_action_ground, ht])).perm_action π.inv
+    debruijnify.go (l.map (π.inv)) t ht = (debruijnify.go l (π⬝t) (by simp [perm_action_ground, ht])).perm_action π.inv
   := by
   induction t generalizing l π with
   | atom x =>
@@ -486,6 +517,36 @@ lemma perm_debruijn'
     rw [← ih]
     simp
     exact ht
+  | asgn x t ih =>
+    simp [debruijnify.go, perm_action]
+    simp [ground] at ht
+    induction l with
+    | nil =>
+      simp [GroundDeBruijn.perm_action]
+      specialize ih ht [] π
+      simp at ih
+      exact ih
+    | cons a l l_ih =>
+      by_cases h: (a = π x)
+      · simp [List.idxOf?_cons, h, GroundDeBruijn.perm_action]
+        specialize ih ht ((π x) :: l) π
+        simp at ih
+        exact ih
+      · simp [List.idxOf?_cons, h]
+        have : π.inv a ≠ x := by
+          intro c
+          rw [← c] at h
+          simp at h
+        simp at this
+        simp [this]
+        simp at l_ih
+        split at l_ih <;> split at l_ih <;> simp [GroundDeBruijn.perm_action] at l_ih
+        · expose_names
+          simp [heq, heq_1, l_ih, GroundDeBruijn.perm_action]
+          specialize ih ht (a :: l) π
+          simp at ih
+          exact ih
+        · split <;> split <;> sorry
   | app t₁ t₂ ih₁ ih₂ =>
     simp [ground] at ht
     obtain ⟨ht₁, ht₂⟩ := ht
@@ -498,7 +559,7 @@ lemma perm_debruijn'
 
 theorem perm_debruijn
   (t: Term 𝔸 𝕏 C) (ht: t.ground) π:
-    debruijnify t ht = (debruijnify (π·t) (by simp [perm_action_ground, ht])).perm_action π.inv := by
+    debruijnify t ht = (debruijnify (π⬝t) (by simp [perm_action_ground, ht])).perm_action π.inv := by
     unfold debruijnify
     simp
     rw [← List.map_nil]
@@ -527,6 +588,17 @@ lemma debruijn'_perm_fresh (t: Term 𝔸 𝕏 C) (ht: t.ground) l π (hf : ∀ a
     intro x hx
     right
     exact hf x hx
+  | asgn a t ih =>
+    simp [ground] at ht
+    specialize ih ht l hf
+    simp [debruijnify.go]
+    split <;> simp [GroundDeBruijn.perm_action]
+    · exact ih
+    · expose_names
+      simp at heq
+      refine ⟨?_, ih⟩
+      have : a ∉ π.support := heq.imp (hf a)
+      exact (π.notin_supp this).symm
   | app t₁ t₂ ih₁ ih₂ =>
     simp [ground] at ht
     specialize ih₁ ht.left
@@ -581,6 +653,21 @@ lemma perm_action_swap
       exact ht
       exact hf
       simp [hlb]
+  | asgn x t ih =>
+    cases hb
+    expose_names
+    simp [ground] at ht
+    simp [perm_action, debruijnify.go]
+    split <;> expose_names
+    · simp [GroundDeBruijn.perm_action]
+      apply ih <;> assumption
+    · simp [GroundDeBruijn.perm_action]
+      simp [Perm.toEquiv, transpose, h_1.symm, h_1]
+      constructor
+      · intro contra
+        simp [Perm.toEquiv, transpose, contra] at heq
+        contradiction
+      · apply ih <;> assumption
   | app t₁ t₂ ih₁ ih₂ =>
     simp [ground] at ht
     obtain ⟨ht₁, ht₂⟩ := ht
@@ -641,7 +728,7 @@ lemma fresh_swap_debruijn' (t: Term 𝔸 𝕏 C) (ht: t.ground) a b (h: a ≠ b)
           rw [this]
           have := perm_action_swap t ht b a h.symm (a :: l) ha (by simp)
           simp only [Perm.swap_inv, transpose_b,
-            show (Perm.swap a b h)·t = (Perm.swap b a h.symm)·t from
+            show (Perm.swap a b h)⬝t = (Perm.swap b a h.symm)⬝t from
               ground_perm_action_ext Perm.swap_symm t ht]
           rw [GroundDeBruijn.perm_action_ext Perm.swap_symm]
           exact this
@@ -650,6 +737,13 @@ lemma fresh_swap_debruijn' (t: Term 𝔸 𝕏 C) (ht: t.ground) a b (h: a ≠ b)
         apply ih ha hb
         simp [hx, hla]
         simp [hxb, hlb]
+  | asgn x t ih =>
+    simp [ground] at ht
+    cases ha
+    cases hb
+    expose_names
+    simp [debruijnify.go, perm_action, Perm.toEquiv, transpose, h_1.symm, h_3.symm]
+    split <;> (simp; apply ih) <;> assumption
   | unknown => simp [ground] at ht
   | app t₁ t₂ ih₁ ih₂ =>
     cases ha
@@ -662,7 +756,7 @@ lemma fresh_swap_debruijn' (t: Term 𝔸 𝕏 C) (ht: t.ground) a b (h: a ≠ b)
   | const c => simp [perm_action]
 
 -- lemma fresh_perm_debruijn' (t: Term 𝔸 𝕏 C) (ht: t.ground) π (hf : ∀ a ∈ π.support, ∅ ⊢ a#t) l:
---   debruijnify.go l t ht = debruijnify.go l (π·t)  (by simp [perm_action_ground, ht]) := by
+--   debruijnify.go l t ht = debruijnify.go l (π⬝t)  (by simp [perm_action_ground, ht]) := by
 --   induction π generalizing t with
 --   | id => simp
 --   | prod π a b h ih =>
@@ -717,6 +811,17 @@ lemma debruijn'_list_eq (t: Term 𝔸 𝕏 C) (ht: t.ground) l₁ l₂ (hl: ∀ 
     · cases h with
       | F_absa => simp [List.idxOf?_cons]
       | F_absb => right; assumption
+  | asgn x t ih =>
+    simp [debruijnify.go]
+    rcases hl x with h|h
+    · rw [h]
+      split <;> (simp; apply ih; {
+        intro x'
+        rcases hl x' with h'|h'
+        · left; exact h'
+        · right; cases h'; assumption
+      })
+    · cases h; contradiction
   | app t₁ t₂ ih₁ ih₂ =>
     simp [ground] at ht
     cases ht
@@ -771,7 +876,7 @@ lemma coreeq_ground {t₁ t₂ : Term 𝔸 𝕏 C} {Δ} (heq: CoreEq Δ t₁ t�
   | N_ax _ _ _ _ _ hp => cases hp
 
 
-lemma chain_de_bruijn' [Infinite 𝔸] (t₁ t₂ : Term 𝔸 𝕏 C) (hg₁ : t₁.ground)
+lemma chain_de_bruijn' (t₁ t₂ : Term 𝔸 𝕏 C) (hg₁ : t₁.ground)
   (ht: CoreEq ∅ t₁ t₂) l:
   debruijnify.go l t₁ (hg₁) = debruijnify.go l t₂ (by rw [← coreeq_ground ht]; exact hg₁) := by
   induction ht generalizing l with
@@ -782,7 +887,6 @@ lemma chain_de_bruijn' [Infinite 𝔸] (t₁ t₂ : Term 𝔸 𝕏 C) (hg₁ : t
   | N_cngApp t₁ t₂ u₁ u₂ ht₁ ht₂ ih₁ ih₂ => simp [debruijnify.go, ih₁, ih₂]
   | N_cngAbs a t u ht ih => simp [debruijnify.go, ih]
   | N_perm a b t h ha hb =>
-    -- rw [perm_action_ground] at hg₁
     induction t generalizing l with
     | atom x =>
       cases ha
@@ -825,7 +929,7 @@ lemma chain_de_bruijn' [Infinite 𝔸] (t₁ t₂ : Term 𝔸 𝕏 C) (hg₁ : t
         | F_absa =>
           simp
           simp [ground, perm_action_ground] at hg₁
-          simp only [show (Perm.swap a b h)·t = (Perm.swap b a h.symm)·t from
+          simp only [show (Perm.swap a b h)⬝t = (Perm.swap b a h.symm)⬝t from
             ground_perm_action_ext Perm.swap_symm t hg₁]
           rw [← perm_action_swap (ht := hg₁)]
           have h1 := perm_debruijn' t hg₁ (a :: l) (Perm.swap b a h.symm)
@@ -850,6 +954,12 @@ lemma chain_de_bruijn' [Infinite 𝔸] (t₁ t₂ : Term 𝔸 𝕏 C) (hg₁ : t
         | F_absb _ _ _ hb hfb =>
           simp [transpose, ha.symm, hb.symm]
           rw [ih] <;> assumption
+    | asgn x t ih =>
+      cases ha
+      cases hb
+      expose_names
+      simp [perm_action, debruijnify.go, Perm.toEquiv, transpose, h_1.symm, h_3.symm]
+      split <;> (simp; apply ih <;> assumption)
     | app t₁ t₂ ih₁ ih₂ =>
       cases ha
       cases hb
@@ -859,20 +969,163 @@ lemma chain_de_bruijn' [Infinite 𝔸] (t₁ t₂ : Term 𝔸 𝕏 C) (hg₁ : t
       rw [ih₁, ih₂] <;> try assumption
       tauto
 
-theorem chain_de_bruijn [Infinite 𝔸] (t₁ t₂: Term 𝔸 𝕏 C) (hg₁: t₁.ground)
+theorem chain_de_bruijn (t₁ t₂: Term 𝔸 𝕏 C) (hg₁: t₁.ground)
   (ht: Term.CoreEq ∅ t₁ t₂):
   debruijnify t₁ (hg₁) = debruijnify t₂ (by rw [← coreeq_ground ht]; exact hg₁) := by
   unfold debruijnify
   apply chain_de_bruijn' (ht := ht)
 
+lemma list_idxOf?_eq_some_eq {l: List 𝔸} {a b n} (h1: l.idxOf? a = some n) (h2: l.idxOf? b = some n) :
+  a = b := by
+  induction l generalizing n with
+  | nil => simp at h1
+  | cons c ls ih =>
+    simp [List.idxOf?_cons] at *
+    split_ifs at h1 <;> split_ifs at h2
+    · subst_vars; rfl
+    · simp at h1;  subst_vars; simp at h2
+    · simp at h2; subst_vars; simp at h1
+    · simp at *
+      obtain ⟨_, ⟨⟩⟩ := h1
+      obtain ⟨_, ⟨⟩⟩ := h2
+      grind
+
+
+-- theorem debruijn'_nomeq [Infinite 𝔸] (t₁ t₂ : Term 𝔸 𝕏 C) (hg₁: t₁.ground) (hg₂ : t₂.ground) l
+--   (hl: ∀ a, (∅ ⊢ a#t₁ ∧ ∅ ⊢ a#t₂) ∨ a ∈ l)
+--   (hd : debruijnify.go l t₁ hg₁ = debruijnify.go l t₂ hg₂) :
+--   Term.CoreEq ∅ t₁ t₂ := by
+--   match t₁ with
+--   | .atom x =>
+--     simp [ground] at hg₁
+--     simp [debruijnify.go] at hd
+--     split at hd <;> expose_names
+--     · cases t₂ <;> simp [debruijnify.go] at hd <;> simp [ground] at hg₂ <;> try (split at hd <;> simp at hd; done)
+--       split at hd <;> simp at hd
+--       expose_names
+--       subst hd
+--       have : x = a := by apply list_idxOf?_eq_some_eq; exact heq; assumption
+--       subst this
+--       constructor
+--     · cases t₂ <;> simp [debruijnify.go] at hd <;> simp [ground] at hg₂ <;> try (split at hd <;> simp at hd; done)
+--       split at hd <;> simp at hd
+--       expose_names
+--       subst hd
+--       constructor
+--   | .unknown _ _ => simp [ground] at hg₁
+--   | .const c =>
+--     cases t₂ <;> simp [debruijnify.go] at hd <;> try (split at hd <;> simp at hd; done)
+--     · simp [ground] at hg₂
+--     · subst hd; constructor
+--   | .abs a t =>
+--     simp [ground] at hg₁
+--     cases t₂ <;> simp [debruijnify.go] at hd <;> simp [ground] at hg₂ <;> try (split at hd <;> simp at hd; done)
+--     expose_names
+--     cases ha: a == a_1 with
+--     | false =>
+--       simp at ha
+--       have ⟨c, hc⟩ := Infinite.exists_notMem_finset (t.atoms ∪ t_1.atoms ∪ l.toFinset ∪ {a, a_1})
+--       simp at hc
+--       rw [t.fresh_swap_debruijn' hg₁ c a hc.left, t_1.fresh_swap_debruijn' hg₂ c a_1 hc.right.left] at hd
+--       rw [debruijn'_list_eq (l₁ := a :: l) (l₂ := c :: l), debruijn'_list_eq (l₁ := a_1 :: l) (l₂ := c :: l)] at hd
+--       sorry
+--       sorry
+--       sorry
+--       sorry
+--       sorry
+--       sorry
+--       sorry
+--       sorry
+--       sorry
+--       sorry
+--       sorry
+--     | true =>
+--       simp at ha
+--       subst ha
+--       apply NominalEq.N_cngAbs
+--       exact debruijn'_nomeq t _ hg₁ hg₂ (a :: l) (by
+--         intro a'
+--         rcases hl a' with ⟨h₁, h₂⟩ | hmem
+--         · cases h₁
+--           · right; simp
+--           · cases h₂ <;> try contradiction
+--             left; constructor <;> assumption
+--         · right; simp [hmem]
+--       ) hd
+--   | .app s₁ s₂ =>
+--     simp [ground] at hg₁
+--     cases t₂ <;> simp [debruijnify.go] at hd <;> simp [ground] at hg₂ <;> try (split at hd <;> simp at hd; done)
+--     apply NominalEq.N_cngApp
+--     · exact debruijn'_nomeq s₁ _ hg₁.left hg₂.left l (by
+--         intro a'; rcases hl a' with ⟨⟨⟩, ⟨⟩⟩ | hmem
+--         · left; constructor <;> assumption
+--         · right; exact hmem
+--       ) hd.left
+--     · exact debruijn'_nomeq s₂ _ hg₁.right hg₂.right l (by
+--         intro a'; rcases hl a' with ⟨⟨⟩, ⟨⟩⟩ | hmem
+--         · left; constructor <;> assumption
+--         · right; exact hmem
+--       ) hd.right
+--   termination_by t₁.size
+--   decreasing_by all_goals (simp only [size]; omega)
 
 end CoreEq
+
+def MakeFresh (𝔸) [DecidableEq 𝔸] := (S: Finset 𝔸) → {a : 𝔸  // a ∉ S }
+
+namespace GroundDeBruijn
+
+def fvs : GroundDeBruijn 𝔸 C → Finset 𝔸
+| fvar a => {a}
+| bvar _ | const _ => ∅
+| asgn_f a t => {a} ∪ t.fvs
+| abs t | asgn_b _ t => t.fvs
+| app t₁ t₂ => t₁.fvs ∪ t₂.fvs
+
+
+def normalize (f: ℕ ↪ 𝔸)  (g: GroundDeBruijn 𝔸 C) [Inhabited 𝔸]: Term 𝔸 𝕏 C
+  := (go 0 [] f g).snd
+  where go (n: ℕ) (l: List 𝔸) f g : ℕ × Term 𝔸 𝕏 C := match g with
+  | bvar a => (n, .atom l[a]!)
+  | fvar a => (n, .atom a)
+  | asgn_b a t =>
+    let (n', t) := go n l f t
+    (n', .asgn l[a]! t)
+  | asgn_f a t =>
+    let (n', t) := go n l f t
+    (n', .asgn a t)
+  | abs t =>
+    let a := f n
+    let (n', t') := go (n + 1) (a :: l) f t
+    (n', .abs a t')
+  | app g₁ g₂ =>
+    let (n', t₁) := go n l f g₁
+    let (n'', t₂) := go n' l f g₂
+    (n'', .app t₁ t₂)
+  | const c => (n, .const c)
+
+omit [DecidableEq 𝔸] in
+lemma normalize'_ground [Inhabited 𝔸] n l f (g: GroundDeBruijn 𝔸 C):
+  (normalize.go l (𝕏 := 𝕏) n f g).2.ground := by
+  induction g generalizing n l with simp [normalize.go, ground, *]
+
+omit [DecidableEq 𝔸] in
+lemma normalize_ground [Inhabited 𝔸] f g :
+  (normalize f g : Term 𝔸 𝕏 C).ground := by unfold normalize; apply normalize'_ground
+
+
+
+end GroundDeBruijn
 end Term
 
 
 
 
-
+-- debruijn to fresh names, fresh names to nominal equality.
+-- annotated (hoare) step relaetion showing separation of capsules (possible hull of scope?)
+-- reachability
+-- capsules and separation
+-- examples of good/bad terms - properties
 
 
 
@@ -903,14 +1156,14 @@ end Term
 --     map := fun x => if x = a then b else if x = b then a else x
 --     map_bij := by
 --       constructor
---       · unfold Function.Injective
+--       ⬝ unfold Function.Injective
 --         aesop
---       · intro x
+--       ⬝ intro x
 --         by_cases x = b
---         · use a; aesop
---         · by_cases x = a
---           · use b; aesop
---           · use x; aesop
+--         ⬝ use a; aesop
+--         ⬝ by_cases x = a
+--           ⬝ use b; aesop
+--           ⬝ use x; aesop
 --     support := {a, b}
 --     map_support_iff := by aesop
 --   }
@@ -925,12 +1178,12 @@ end Term
 --   constructor; try assumption
 --   ext x
 --   constructor
---   · intro h₁
+--   ⬝ intro h₁
 --     apply (hs₂ x).mpr
 --     rw [← h]
 --     apply (hs₁ x).mp
 --     exact h₁
---   · intro h₂
+--   ⬝ intro h₂
 --     apply (hs₁ x).mpr
 --     rw [h]
 --     apply (hs₂ x).mp
@@ -938,13 +1191,13 @@ end Term
 
 
 -- instance : FunLike (Permutation 𝔸) 𝔸 𝔸 where
---   coe := (·.map)
+--   coe := (⬝.map)
 --   coe_injective' := by intro a b; simp; apply Permutation.map_inj
 
 -- variable (π : Permutation 𝔸)
 -- lemma Permutation.closed x : x ∈ π.support ↔ π x ∈ π.support := by
 --   constructor
---   · intro h
+--   ⬝ intro h
 --     by_contra
 --     have := (π.map_support_iff (π x)).mpr
 --     contrapose this
