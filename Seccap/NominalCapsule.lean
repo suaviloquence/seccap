@@ -13,7 +13,7 @@ lemma value_ground {t: Term 𝔸 𝕏 C} : t.value → t.ground := by
   induction t with simp_all [value, ground]
 
 namespace Ground
-variable {𝔸 C} (a b: 𝔸) (t t₁ t₂ : Ground 𝔸 C)
+variable {𝔸 C} [DecidableEq 𝔸] (a b: 𝔸) (t t₁ t₂ : Ground 𝔸 C)
 
 abbrev atom : Ground 𝔸 C := ⟨.atom a, rfl⟩
 abbrev abs : Ground 𝔸 C := ⟨.abs a t, by simp [ground, t.2]⟩
@@ -21,7 +21,26 @@ abbrev asgn : Ground 𝔸 C := ⟨.asgn a t, by simp [ground, t.2]⟩
 abbrev app : Ground 𝔸 C := ⟨.app t₁ t₂, by simp [ground, t₁.2, t₂.2]⟩
 abbrev const (c: C) : Ground 𝔸 C := ⟨.const c, rfl⟩
 
-abbrev swap [DecidableEq 𝔸] (h: a ≠ b) : Ground 𝔸 C := ⟨t.1.swap a b h, by simp [perm_action_ground, t.2]⟩
+abbrev swap (h: a ≠ b) : Ground 𝔸 C := ⟨t.1.swap a b h, by simp [perm_action_ground, t.2]⟩
+
+omit [DecidableEq 𝔸] in
+lemma coe_abs a (t: Term 𝔸 Unit C) ht :
+  ⟨t.abs a, ht⟩ = abs a ⟨t, by simp [ground] at ht; exact ht⟩ := rfl
+
+omit [DecidableEq 𝔸] in
+lemma coe_asgn a (t: Term 𝔸 Unit C) ht :
+  ⟨t.asgn a, ht⟩ = asgn a ⟨t, by simp [ground] at ht; exact ht⟩ := rfl
+
+omit [DecidableEq 𝔸] in
+lemma coe_app (t₁ t₂: Term 𝔸 Unit C) ht :
+  ⟨t₁.app t₂, ht⟩ = app ⟨t₁, by simp [ground] at ht; exact ht.left⟩ ⟨t₂, by simp [ground] at ht; exact ht.right⟩ := rfl
+
+lemma coe_swap (t: Term 𝔸 Unit C) ht a b h :
+  swap a b ⟨t, ht⟩ h = ⟨t.swap a b h, by simpa [perm_action_ground]⟩ := rfl
+
+omit [DecidableEq 𝔸] in
+@[simp]
+lemma ground_ground : t.1.ground := t.2
 
 end Ground
 
@@ -107,6 +126,22 @@ lemma getVal_iff_getVal? (s : Store α β) a b :
       · intro hr
         obtain ⟨h', hh'⟩ := ih.mpr hr
         exact ⟨Or.inr h', hh'⟩
+
+def permute (s: Store α β) (π : Perm α) : Store α β := match s with
+| [] => []
+| (a, v)::s => (π a, v)::(permute s π)
+
+abbrev swap (s: Store α β) a b h := s.permute (Perm.swap a b h)
+
+lemma getVal?_permute {s: Store α β} {a π} :
+  s.getVal? a = (s.permute π).getVal? (π a) := by induction s with
+  | nil => simp [permute, getVal?]
+  | cons b s ih =>
+    obtain ⟨b, v⟩ := b
+    simp [getVal?, permute]
+    split_ifs
+    · rfl
+    · exact ih
 
 end Store
 
@@ -265,3 +300,129 @@ lemma valid_step {c₁ c₂: Capsule 𝔸 C} (hc: c₁.valid) (h: Step c₁ c₂
         grind
 end Step
 end Capsule
+
+namespace Types
+inductive BaseType (B: Type*) where
+| base (b: B)
+| arrow (T₁ T₂ : BaseType B)
+
+class ConstantFamily (C: Type*) where
+  bases: Type*
+  type : C → bases
+
+export ConstantFamily (bases type)
+
+variable {𝔸 C : Type} [DecidableEq 𝔸] [ConstantFamily C]
+
+inductive HasType : (Store 𝔸 (BaseType (bases C))) → Term.Ground 𝔸 C → BaseType (bases C) → Prop
+| Const Γ c : HasType Γ (.const c) (.base (type c))
+| Atom Γ  x τ : Γ.getVal? x = some τ → HasType Γ (.atom x) τ
+| Abs Γ x t τ₁ τ₂ : HasType ((x, τ₁)::Γ) t τ₂ → HasType Γ (.abs x t) (τ₁.arrow τ₂)
+| Asgn Γ x t τ : Γ.getVal? x = some τ → HasType Γ t τ → HasType Γ (.asgn x t) τ
+| App Γ t₁ t₂ τ₁ τ₂ : HasType Γ t₁ (τ₁.arrow τ₂) → HasType Γ t₂ τ₁ → HasType Γ (.app t₁ t₂) (τ₂)
+
+
+variable {t: Term.Ground 𝔸 C}
+
+lemma type_ext {Γ Δ τ} (h: ∀ {a v}, Γ.getVal? a = some v → Δ.getVal? a = some v) (ht: HasType Γ t τ) :
+  HasType Δ t τ := by induction ht generalizing Δ with
+  | Const c => constructor
+  | Atom Γ x τ ha => constructor; exact h ha
+  | Abs Γ x t τ₁ τ₂ ht ih =>
+    constructor
+    apply ih
+    intro a v ha
+    simp [Store.getVal?]
+    split_ifs with hx
+    · simp [Store.getVal?, hx] at ha
+      simp [ha]
+    · simp [Store.getVal?, hx] at ha
+      exact h ha
+  | Asgn Γ x t τ hx ht ih =>
+    constructor
+    · exact h hx
+    · exact ih h
+  | App Γ t₁ t₂ τ₁ τ₂ ht₁ ht₂ ih₁ ih₂ =>
+    constructor
+    · exact ih₁ h
+    · exact ih₂ h
+
+lemma swap_type {a b h Γ τ} (ht: HasType Γ t τ) :
+  HasType (Γ.swap a b h) (t.swap a b h) τ := by
+  induction ht with
+  | Const Δ c => simp [Term.Ground.swap, Term.perm_action]; constructor
+  | Atom Δ x τ hx =>
+    simp [Term.Ground.swap, Term.perm_action]
+    constructor
+    rw [← Store.getVal?_permute]
+    exact hx
+  | Abs Δ x t  τ₁ τ₂ hx ih =>
+    simp [Term.Ground.swap, Term.perm_action, Perm.toEquiv]
+    simp only [← Term.swap.eq_def]
+    rw [Term.Ground.coe_abs, ← Term.Ground.coe_swap (ht := by simp)]
+    constructor
+    simp [Store.permute, Perm.toEquiv] at ih
+    apply ih
+  | App Γ t₁ t₂ τ₁ τ₂ ht₁ ht₂ ih₁ ih₂ =>
+    simp [Term.Ground.swap, Term.perm_action]
+    simp only [← Term.swap.eq_def]
+    rw [Term.Ground.coe_app, ← Term.Ground.coe_swap (ht := by simp), ← Term.Ground.coe_swap (ht := by simp)]
+    constructor
+    · exact ih₁
+    · exact ih₂
+  | Asgn Γ x t τ hx ht ih =>
+    simp [Term.Ground.swap, Term.perm_action, ← Term.swap.eq_def]
+    rw [Term.Ground.coe_asgn, ← Term.Ground.coe_swap (ht := by simp)]
+    constructor
+    · rw [← Store.getVal?_permute]
+      exact hx
+    · exact ih
+
+
+open Capsule in
+lemma arrow_inversion {Γ τ₁ τ₂} (h: HasType Γ t (.arrow τ₁ τ₂)) (hv: t.1.value):
+  ∃ x t', t = .abs x t' ∧ HasType ((x, τ₁)::Γ) t' τ₂ := by
+  cases h with simp [Term.value] at hv
+  | Abs _ x t _ _ h => use x,t
+
+open Capsule in
+lemma progress [Infinite 𝔸] {σ τ Γ} (hs: Γ.dom ⊆ σ.dom) (h: HasType Γ t τ) :
+    t.1.value ∨ ∃ t' σ', Step ⟨t, σ⟩ ⟨t', σ'⟩ := by
+  induction h generalizing σ with
+  | Const => left; simp [Term.value]
+  | Atom Γ x τ hx =>
+    obtain ⟨hτ₁, hτ₂⟩ := (Γ.getVal_iff_getVal? _ _).mpr hx
+    have hx := hs hτ₁
+    have := (σ.getVal_iff_getVal? _ _).mp ⟨hx, rfl⟩
+    right; use σ.getVal x hx, σ
+    apply Step.Var
+    exact this
+  | Abs Γ x t τ₁ τ₂ ht ih => left; simp [Term.value, t.2]
+  | Asgn Γ x t τ hx ht ih =>
+    right
+    rcases ih hs with hv|⟨t', ⟨σ', ht'⟩⟩
+    · let v: Term.Value _ _ := ⟨t.1, hv⟩
+      have : t = v := by simp [v]
+      rw [this]
+      use v, (x, v)::σ
+      apply Step.AsgnV x v σ
+    · use .asgn x t', σ'
+      apply Step.Asgn
+      exact ht'
+  | App Γ t₁ t₂ τ₁ τ₂ ht₁ ht₂ ih₁ ih₂ =>
+    right
+    rcases ih₁ hs with hv₁|⟨t₁', ⟨σ', ht₁'⟩⟩
+    · rcases ih₂ hs with hv₂|⟨t₂', ⟨σ', ht₂'⟩⟩
+      · let v: Term.Value _ _ := ⟨t₂.1, hv₂⟩
+        have: t₂ = v := by simp [v]
+        obtain ⟨x, ⟨t, ⟨heq, ht⟩⟩⟩ := arrow_inversion ht₁ hv₁
+        rw [this, heq]
+        obtain ⟨b, hb⟩ := Infinite.exists_notMem_finset (σ.dom ∪ t.1.atoms ∪ {x})
+        use t.swap x b (by simp at hb; exact Ne.symm hb.left), (b, v)::σ
+        refine Step.AppAbs x t v σ b hb
+      · let v: Term.Value _ _ := ⟨t₁.1, hv₁⟩
+        use Term.Ground.app v t₂', σ'
+        refine Step.AppV v t₂ σ t₂' σ' ht₂'
+    · use t₁'.app t₂, σ'
+      refine Step.App t₁ t₂ σ t₁' σ' ht₁'
+end Types
