@@ -210,6 +210,13 @@ lemma getVal?_permute {s: Store α β} {a π} :
     · rfl
     · exact ih
 
+lemma getVal?_permute' {s: Store α β} {a π} :
+  s.getVal? (π.inv a) = (s.permute π).getVal? a := by
+  have : a = π (π.inv a) := by simp
+  conv => rhs; rw [this]
+  apply getVal?_permute
+
+
 def ext_le (s s' : Store α β) :=
   ∃ h: s.dom ⊆ s'.dom, ∀ {a} (ha: a ∈ s.dom),
     s.getVal a ha = s'.getVal a (h ha)
@@ -514,57 +521,30 @@ inductive HasType : (Store 𝔸 (BaseType (bases C))) → Term.Ground 𝔸 C →
 
 variable {t: Term.Ground 𝔸 C}
 
-lemma type_ext {Γ Δ τ} (h: ∀ {a v}, Γ.getVal? a = some v → Δ.getVal? a = some v) (ht: HasType Γ t τ) :
-  HasType Δ t τ := by induction ht generalizing Δ with
-  | Const c => constructor
-  | Atom Γ x τ ha => constructor; exact h ha
-  | Abs Γ x t τ₁ τ₂ ht ih =>
-    constructor
-    apply ih
-    intro a v ha
-    simp [Store.getVal?]
-    split_ifs with hx
-    · simp [Store.getVal?, hx] at ha
-      simp [ha]
-    · simp [Store.getVal?, hx] at ha
-      exact h ha
-  | Asgn Γ x t τ hx ht ih =>
-    constructor
-    · exact h hx
-    · exact ih h
-  | App Γ t₁ t₂ τ₁ τ₂ ht₁ ht₂ ih₁ ih₂ =>
-    constructor
-    · exact ih₁ h
-    · exact ih₂ h
-
 lemma swap_type {a b h Γ τ} (ht: HasType Γ t τ) :
   HasType (Γ.swap a b h) (t.swap a b h) τ := by
   induction ht with
   | Const Δ c => simp [Term.Ground.swap, Term.perm_action]; constructor
   | Atom Δ x τ hx =>
-    simp [Term.Ground.swap, Term.perm_action]
+    simp
     constructor
-    rw [← Store.getVal?_permute]
-    exact hx
+    rw [← Store.getVal?_permute']
+    simp [Perm.toEquiv, hx]
   | Abs Δ x t  τ₁ τ₂ hx ih =>
-    simp [Term.Ground.swap, Term.perm_action, Perm.toEquiv]
-    simp only [← Term.swap.eq_def]
-    rw [Term.Ground.coe_abs, ← Term.Ground.coe_swap (ht := by simp)]
+    simp
     constructor
     simp at ih
     apply ih
   | App Γ t₁ t₂ τ₁ τ₂ ht₁ ht₂ ih₁ ih₂ =>
-    simp [Term.Ground.swap, Term.perm_action]
-    simp only [← Term.swap.eq_def]
-    rw [Term.Ground.coe_app, ← Term.Ground.coe_swap (ht := by simp), ← Term.Ground.coe_swap (ht := by simp)]
+    simp
     constructor
     · exact ih₁
     · exact ih₂
   | Asgn Γ x t τ hx ht ih =>
-    simp [Term.Ground.swap, Term.perm_action, ← Term.swap.eq_def]
-    rw [Term.Ground.coe_asgn, ← Term.Ground.coe_swap (ht := by simp)]
+    simp
     constructor
-    · rw [← Store.getVal?_permute]
+    · rw [← Store.getVal?_permute']
+      simp [Perm.toEquiv]
       exact hx
     · exact ih
 

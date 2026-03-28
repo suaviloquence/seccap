@@ -26,6 +26,10 @@ lemma transpose_a (a b : 𝔸): (transpose a b) a = b := by simp [transpose]
 @[simp]
 lemma transpose_b (a b : 𝔸): (transpose a b) b = a := by simp [transpose]
 
+@[simp]
+lemma transpose_transpose {a b x : 𝔸} : transpose a b (transpose a b x) = x := by
+  apply transpose_involutive
+
 def Perm.toEquiv : Perm 𝔸 → Equiv.Perm 𝔸
 | id => {
     toFun := _root_.id
@@ -37,11 +41,8 @@ def Perm.toEquiv : Perm 𝔸 → Equiv.Perm 𝔸
     left_inv := by
       intro x
       simp
-      apply transpose_involutive
     right_inv := by
       intro x
-      simp
-      rw [transpose_involutive]
       simp
   }
 
